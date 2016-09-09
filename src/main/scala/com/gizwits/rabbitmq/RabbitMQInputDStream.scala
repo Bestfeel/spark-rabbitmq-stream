@@ -1,7 +1,10 @@
 
 package com.gizwits.rabbitmq
 
+import java.util.concurrent.atomic.AtomicInteger
+
 import com.rabbitmq.client._
+import org.apache.commons.lang.StringUtils
 import org.apache.spark.Logging
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.streaming.StreamingContext
@@ -16,23 +19,36 @@ class RabbitMQInputDStream(
                             rabbitMQQueueName: Option[String],
                             rabbitMQHost: String,
                             rabbitMQPort: Int,
+                            virtualhost: String,
+                            username: String,
+                            password: String,
                             exchangeName: Option[String],
                             routingKeys: Seq[String],
-                            DirectExchangeType:Option[String],
-                            ack:Boolean,
+                            DirectExchangeType: Option[String],
+                            ack: Boolean,
+                            autoDelete: Boolean,
+                            prefetchCount: Int,
+                            streamingtime: Int,
                             storageLevel: StorageLevel
-                            ) extends ReceiverInputDStream[String](ssc_) with Logging {
+                          ) extends ReceiverInputDStream[String](ssc_) with Logging {
 
   override def getReceiver(): Receiver[String] = {
     val DefaultRabbitMQPort = 5672
 
-    new RabbitMQReceiver(rabbitMQQueueName,
+    new RabbitMQReceiver(
+      rabbitMQQueueName,
       Some(rabbitMQHost).getOrElse("localhost"),
       Some(rabbitMQPort).getOrElse(DefaultRabbitMQPort),
+      virtualhost,
+      username,
+      password,
       exchangeName,
       routingKeys,
       DirectExchangeType.getOrElse("direct"),
-        ack,
+      ack,
+      autoDelete,
+      prefetchCount,
+      streamingtime,
       storageLevel)
   }
 }
@@ -41,19 +57,25 @@ class RabbitMQInputDStream(
 class RabbitMQReceiver(rabbitMQQueueName: Option[String],
                        rabbitMQHost: String,
                        rabbitMQPort: Int,
+                       virtualhost: String,
+                       username: String,
+                       password: String,
                        exchangeName: Option[String],
                        routingKeys: Seq[String],
-                       DirectExchangeType:String,
-                       ack:Boolean,
+                       DirectExchangeType: String,
+                       ack: Boolean,
+                       autoDelete: Boolean,
+                       prefetchCount: Int,
+                       streamingtime: Int,
                        storageLevel: StorageLevel)
   extends Receiver[String](storageLevel) with Logging {
 
- // val DirectExchangeType: String = "direct"
+  private val count: AtomicInteger = new AtomicInteger(0)
 
   def onStart() {
     implicit val akkaSystem = akka.actor.ActorSystem()
     getConnectionAndChannel match {
-      case Success((connection: Connection, channel: Channel)) => receive(connection, channel,ack)
+      case Success((connection: Connection, channel: Channel)) => receive(connection, channel, ack)
       case Failure(f) => log.error("Could not connect"); restart("Could not connect", f)
     }
   }
@@ -64,13 +86,22 @@ class RabbitMQReceiver(rabbitMQQueueName: Option[String],
   }
 
   /** Create a socket connection and receive data until receiver is stopped */
-  private def receive(connection: Connection, channel: Channel,ack:Boolean) {
+  private def receive(connection: Connection, channel: Channel, ack: Boolean) {
 
     val queueName = !routingKeys.isEmpty match {
       case true => {
-        channel.exchangeDeclare(exchangeName.get, DirectExchangeType)
-       // val queueName = channel.queueDeclare().getQueue()
-        channel.queueDeclare(rabbitMQQueueName.get, false, false, false, null)
+
+        if (prefetchCount > 0) {
+          channel.basicQos(prefetchCount)
+        }
+
+        // exchangeName   存在 会报错  ,比如使用 amq.topic
+        // channel.exchangeDeclare(exchangeName.get, DirectExchangeType)
+
+
+        channel.exchangeDeclarePassive(exchangeName.get)
+
+        channel.queueDeclare(rabbitMQQueueName.get, false, false, autoDelete, null)
 
         for (routingKey: String <- routingKeys) {
           channel.queueBind(rabbitMQQueueName.get, exchangeName.get, routingKey)
@@ -78,31 +109,48 @@ class RabbitMQReceiver(rabbitMQQueueName: Option[String],
         rabbitMQQueueName.get
       }
       case false => {
-       // channel.queueDeclare(rabbitMQQueueName.get, false, false, false, new com.gizwits.AkkaActor.util.HashMap(0))
+        // channel.queueDeclare(rabbitMQQueueName.get, false, false, false, new util.HashMap(0))
         rabbitMQQueueName.get
       }
     }
 
     log.info("RabbitMQ Input waiting for messages")
     val consumer: QueueingConsumer = new QueueingConsumer(channel)
-   // val ack = false
+
+
+
     channel.basicConsume(queueName, ack, consumer)
 
     while (!isStopped) {
-      val delivery: QueueingConsumer.Delivery = consumer.nextDelivery
-      store(new String(delivery.getBody))
 
-      if(!ack){
-        channel.basicAck(delivery.getEnvelope().getDeliveryTag(), false);
+
+      if (count.get() < prefetchCount) {
+        val delivery: QueueingConsumer.Delivery = consumer.nextDelivery
+        val body = new String(delivery.getBody)
+        if (StringUtils.isNotEmpty(body)) {
+          store(body)
+        }
+
+        if (!ack) {
+          channel.basicAck(delivery.getEnvelope().getDeliveryTag(), ack)
+        }
+
+
+
+        count.incrementAndGet()
+      } else {
+
+
+        Thread.sleep((streamingtime) * 1000)
+        count.set(0)
       }
-
 
     }
 
-    log.info("it has been stopped")
+    log.info("rabbitmq  streaming  it has been stopped ...............")
     channel.close
     connection.close
-    restart("Trying to connect again")
+    restart("Trying to connect again............")
   }
 
   private def getConnectionAndChannel: Try[(Connection, Channel)] = {
@@ -116,8 +164,28 @@ class RabbitMQReceiver(rabbitMQQueueName: Option[String],
 
   private def getConnectionFactory: ConnectionFactory = {
     val factory: ConnectionFactory = new ConnectionFactory
-    factory.setHost(rabbitMQHost)
-    factory.setPort(rabbitMQPort)
+
+    if (StringUtils.isNotEmpty(rabbitMQHost)) {
+      factory.setHost(rabbitMQHost)
+
+    }
+    if (rabbitMQPort != 0) {
+      factory.setPort(rabbitMQPort)
+    }
+
+    factory.setConnectionTimeout(1000)
+    if (StringUtils.isNotEmpty(virtualhost)) {
+      factory.setVirtualHost(virtualhost)
+    }
+    if (StringUtils.isNotEmpty(username)) {
+      factory.setUsername(username)
+    }
+    if (StringUtils.isNotEmpty(password)) {
+      factory.setPassword(password)
+
+    }
+
+
     factory
   }
 }

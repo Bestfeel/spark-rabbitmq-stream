@@ -18,15 +18,26 @@ object RabbitMQReceiver {
     ssc.checkpoint(".")
     val rabbitMQHosts = "localhost"
 
+
+
     val rbs = RabbitMQUtils.createStreamFromRoutingKeys(ssc,
       Option("topqueue"),
       rabbitMQHosts,
       5672,
+      "/",
+      "guest",
+      "guest",
       "topic_logs_exchange",
       List("log.*"),
       Option("topic"),
       false,
+      false,
+      1000,
+      2,
       StorageLevel.MEMORY_AND_DISK_SER_2)
+
+
+
     rbs.print()
     ssc.start()
 
