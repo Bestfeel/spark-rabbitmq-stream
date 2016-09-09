@@ -1,7 +1,9 @@
-# sparkstream-rabbitmq 
+package com.gizwits
 
+/**
+  * Created by feel on 16/9/9.
+  */
 
-```
 import com.gizwits.rabbitmq.RabbitMQUtils
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.streaming._
@@ -33,5 +35,3 @@ object RabbitMQReceiver {
 
   }
 }
-
-```

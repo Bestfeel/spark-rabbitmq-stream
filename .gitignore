@@ -1,17 +1,42 @@
-*.class
-*.log
 
-# sbt specific
-.cache
-.history
-.lib/
-dist/*
+.idea/
+*.sln.iml
+### SBT template
+# Simple Build Tool
+# http://www.scala-sbt.org/release/docs/Getting-Started/Directories.html#configuring-version-control
+
 target/
 lib_managed/
 src_managed/
 project/boot/
+.history
+.cache
+### Java template
+*.class
+
+# Mobile Tools for Java (J2ME)
+.mtj.tmp/
+
+# Package Files #
+*.jar
+*.war
+*.ear
+
 project/plugins/project/
 
 # Scala-IDE specific
 .scala_dependencies
 .worksheet
+### Example user template template
+### Example user template
+
+# IntelliJ project files
+*.iml
+out
+gen### Gradle template
+.gradle
+build/
+
+
+ .idea/vcs.xml
+
